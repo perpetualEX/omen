@@ -1,0 +1,69 @@
+{
+  "project": {
+    "name": "Omen",
+    "tagline": "Autonomous prediction markets for on-chain events, resolved by AI and chain state.",
+    "description": "Omen is a prediction market appchain where an AI agent proposes, prices (LMSR), and resolves binary markets about on-chain events without human operators. Built as a MiniEVM rollup on Initia, it uses autosigning to make betting feel like tapping 'like', the Interwoven Bridge for one-click USDC onboarding, and .init usernames for human-readable leaderboards.",
+    "track": "defi",
+    "secondary_tracks": ["ai"]
+  },
+  "rollup": {
+    "chain_id": "omen-testnet-1",
+    "evm_chain_id": 0,
+    "rollup_type": "minievm",
+    "rpc": "https://rpc.omen-testnet-1.initia.tech",
+    "json_rpc": "https://json-rpc.omen-testnet-1.initia.tech",
+    "explorer": "https://scan.initia.xyz/omen-testnet-1",
+    "deployment_tx": "REPLACE_WITH_DEPLOYMENT_TX_HASH"
+  },
+  "features": {
+    "interwovenkit_integrated": true,
+    "interwovenkit_entry_point": "frontend/app/providers.tsx",
+    "initia_native_features": [
+      {
+        "feature": "autosign",
+        "where": "frontend/components/BetButton.tsx",
+        "notes": "Enabled on first bet; 24h default session."
+      },
+      {
+        "feature": "interwoven_bridge",
+        "where": "frontend/components/DepositDrawer.tsx",
+        "notes": "USDC onboarding from any supported chain."
+      },
+      {
+        "feature": "initia_usernames",
+        "where": "frontend/components/Leaderboard.tsx",
+        "notes": ".init names resolved for top 100 bettors."
+      }
+    ]
+  },
+  "contracts": [
+    {
+      "name": "MarketFactory",
+      "address": "REPLACE_AFTER_DEPLOY",
+      "source": "contracts/src/MarketFactory.sol"
+    },
+    {
+      "name": "PredictionMarket",
+      "address": "REPLACE_AFTER_DEPLOY",
+      "source": "contracts/src/PredictionMarket.sol"
+    },
+    {
+      "name": "Treasury",
+      "address": "REPLACE_AFTER_DEPLOY",
+      "source": "contracts/src/Treasury.sol"
+    }
+  ],
+  "demo": {
+    "live_url": "REPLACE_WITH_LIVE_URL",
+    "video_url": "REPLACE_WITH_VIDEO_URL",
+    "pitch_deck_url": null
+  },
+  "team": [
+    {
+      "name": "REPLACE",
+      "role": "Founder / Full-stack",
+      "github": "REPLACE",
+      "twitter": "REPLACE"
+    }
+  ]
+}
