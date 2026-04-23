@@ -1,0 +1,27 @@
+{
+  "name": "omen-agent",
+  "version": "1.0.0",
+  "description": "Autonomous market maker for Omen prediction markets",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "propose": "tsx src/index.ts propose-once",
+    "resolve": "tsx src/index.ts resolve-once",
+    "once": "tsx src/index.ts once",
+    "typecheck": "tsc --noEmit"
+  },
+  "packageManager": "pnpm@10.23.0",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.90.0",
+    "dotenv": "^17.4.2",
+    "node-cron": "^4.2.1",
+    "viem": "^2.48.4",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  }
+}
