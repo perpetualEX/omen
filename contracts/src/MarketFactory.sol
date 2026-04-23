@@ -1,47 +1,71 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "./PredictionMarket.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {PredictionMarket} from "./PredictionMarket.sol";
 
 /**
  * @title MarketFactory
- * @notice Only the registered AI agent address can spawn markets or resolve them.
- *         The agent is expected to seed each market with an equal YES/NO reserve
- *         so both sides start at 50% implied probability.
+ * @notice Single source of truth for spawning and resolving Omen markets.
+ *         Only the registered AI agent address can create or resolve markets.
  */
-contract MarketFactory {
-    address public owner;        // multisig in prod; EOA for hackathon
-    address public agent;        // the AI agent's signing address
-    address public treasury;
-    IERC20  public collateral;
+contract MarketFactory is Ownable {
+    using SafeERC20 for IERC20;
+
+    address public agent;
+    address public immutable treasury;
+    IERC20 public immutable collateral;
 
     address[] public markets;
     mapping(address => bool) public isMarket;
+    mapping(address => uint256) public marketIndex;
 
-    event MarketCreated(address indexed market, string question, uint256 resolutionTime, uint256 seed);
+    event MarketCreated(
+        address indexed market,
+        uint256 indexed index,
+        string question,
+        uint256 resolutionTime,
+        uint256 seed
+    );
     event MarketResolved(address indexed market, PredictionMarket.Outcome outcome);
-    event AgentChanged(address indexed newAgent);
+    event AgentChanged(address indexed oldAgent, address indexed newAgent);
 
-    modifier onlyOwner() { require(msg.sender == owner, "not owner"); _; }
-    modifier onlyAgent() { require(msg.sender == agent, "not agent"); _; }
+    error NotAgent();
+    error UnknownMarket();
 
-    constructor(address _agent, address _treasury, IERC20 _collateral) {
-        owner = msg.sender;
+    modifier onlyAgent() {
+        if (msg.sender != agent) revert NotAgent();
+        _;
+    }
+
+    constructor(
+        address _agent,
+        address _treasury,
+        IERC20 _collateral,
+        address initialOwner
+    ) Ownable(initialOwner) {
         agent = _agent;
         treasury = _treasury;
         collateral = _collateral;
     }
 
     function setAgent(address newAgent) external onlyOwner {
+        emit AgentChanged(agent, newAgent);
         agent = newAgent;
-        emit AgentChanged(newAgent);
     }
 
-    function createMarket(
-        string calldata question,
-        uint256 resolutionTime,
-        uint256 seed
-    ) external onlyAgent returns (address marketAddr) {
+    /**
+     * @notice Spawn a new binary market. Only callable by the agent.
+     * @dev The agent must have approved this factory for `seed * 2` collateral,
+     *      which is forwarded to the new market to seed its reserves.
+     */
+    function createMarket(string calldata question, uint256 resolutionTime, uint256 seed)
+        external
+        onlyAgent
+        returns (address marketAddr)
+    {
         PredictionMarket m = new PredictionMarket(
             address(this),
             treasury,
@@ -51,21 +75,37 @@ contract MarketFactory {
             seed
         );
         marketAddr = address(m);
+        uint256 idx = markets.length;
         markets.push(marketAddr);
         isMarket[marketAddr] = true;
+        marketIndex[marketAddr] = idx;
 
-        // Seed the market's reserves by transferring collateral in.
-        // Factory must be pre-funded or agent must have approved the factory.
-        require(collateral.transferFrom(msg.sender, marketAddr, seed * 2), "seed xferFrom");
+        // Seed both sides of the CPMM reserves. Agent must have approved us.
+        collateral.safeTransferFrom(msg.sender, marketAddr, seed * 2);
 
-        emit MarketCreated(marketAddr, question, resolutionTime, seed);
+        emit MarketCreated(marketAddr, idx, question, resolutionTime, seed);
     }
 
     function resolveMarket(address market, PredictionMarket.Outcome outcome) external onlyAgent {
-        require(isMarket[market], "unknown market");
+        if (!isMarket[market]) revert UnknownMarket();
         PredictionMarket(market).resolve(outcome);
         emit MarketResolved(market, outcome);
     }
 
-    function marketCount() external view returns (uint256) { return markets.length; }
+    function marketCount() external view returns (uint256) {
+        return markets.length;
+    }
+
+    /// @notice Returns up to `count` markets starting at `offset`. For paginated frontend feeds.
+    function getMarkets(uint256 offset, uint256 count) external view returns (address[] memory page) {
+        uint256 total = markets.length;
+        if (offset >= total) return new address[](0);
+        uint256 end = offset + count;
+        if (end > total) end = total;
+        uint256 len = end - offset;
+        page = new address[](len);
+        for (uint256 i = 0; i < len; i++) {
+            page[i] = markets[offset + i];
+        }
+    }
 }

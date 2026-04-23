@@ -1,54 +1,66 @@
-# Omen Contracts
+## Foundry
 
-Solidity contracts for Omen, deployed to the Omen MiniEVM rollup.
+**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
 
-## Setup
+Foundry consists of:
 
-```bash
-curl -L https://foundry.paradigm.xyz | bash
-foundryup
-forge install foundry-rs/forge-std --no-commit
+- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
+- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
+- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
+- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+
+## Documentation
+
+https://book.getfoundry.sh/
+
+## Usage
+
+### Build
+
+```shell
+$ forge build
 ```
 
-## Build
+### Test
 
-```bash
-forge build
+```shell
+$ forge test
 ```
 
-## Test
+### Format
 
-```bash
-forge test -vvv
+```shell
+$ forge fmt
 ```
 
-## Deploy to Omen rollup
+### Gas Snapshots
 
-```bash
-export OMEN_RPC_URL=https://json-rpc.omen-testnet-1.initia.tech
-export AGENT_ADDRESS=0x...            # the AI agent's signing address
-export COLLATERAL_TOKEN=0x...         # USDC on your rollup
-export PRIVATE_KEY=0x...              # deployer key
-
-forge script script/Deploy.s.sol:Deploy \
-  --rpc-url $OMEN_RPC_URL \
-  --private-key $PRIVATE_KEY \
-  --broadcast
+```shell
+$ forge snapshot
 ```
 
-After deploy, update `.initia/submission.json` with the Treasury and MarketFactory addresses, then also update `frontend/lib/addresses.ts` and `agent/src/config.ts`.
+### Anvil
 
-## Contract Overview
+```shell
+$ anvil
+```
 
-- **PredictionMarket.sol** — binary YES/NO market with CPMM pricing. Resolved by the factory (which is called by the agent).
-- **MarketFactory.sol** — only the agent address can `createMarket()` or `resolveMarket()`.
-- **Treasury.sol** — collects the 2% bet fee and 5% resolution fee.
+### Deploy
 
-## Security Notes (for judges)
+```shell
+$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
+```
 
-This is hackathon code. Production would need:
-- Replace the agent EOA with a threshold-signed oracle (or a dispute game with economic finality)
-- Add a pause mechanism on the factory
-- Add a per-market creation bond to prevent spam
-- Formal LMSR (log-based cost fn) for bounded loss guarantees
-- Audits
+### Cast
+
+```shell
+$ cast <subcommand>
+```
+
+### Help
+
+```shell
+$ forge --help
+$ anvil --help
+$ cast --help
+```

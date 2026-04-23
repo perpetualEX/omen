@@ -1,44 +1,49 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
 /**
  * @title PredictionMarket
- * @notice Binary YES/NO prediction market with constant-product pricing (simplified LMSR).
- *         For hackathon scope we use a CPMM — architecturally interchangeable with full LMSR,
- *         much less gas, and easier to reason about.
+ * @notice Binary YES/NO prediction market using a constant-product market maker (CPMM)
+ *         for pricing. Architecturally interchangeable with LMSR, but much simpler gas
+ *         profile and easier to audit in a hackathon window.
  *
  * Lifecycle:
- *   CREATED -> OPEN (funded) -> RESOLVED -> CLAIMABLE
+ *   CREATED (at construction) -> OPEN (funded + betting) -> RESOLVED -> CLAIMABLE
  *
- * Resolution: only the factory (acting on behalf of the AI agent) can resolve.
- *             In production this would be replaced with an on-chain oracle / dispute game.
+ * Resolution authority:
+ *   Only the factory (acting on behalf of the AI agent) can call `resolve()`.
+ *   In production this would be replaced with an on-chain oracle + dispute window.
  */
+contract PredictionMarket is ReentrancyGuard {
+    using SafeERC20 for IERC20;
 
-interface IERC20 {
-    function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
-}
+    enum Outcome {
+        UNRESOLVED,
+        YES,
+        NO,
+        INVALID
+    }
 
-contract PredictionMarket {
-    enum Outcome { UNRESOLVED, YES, NO, INVALID }
-
-    // --- Config ---
+    // --- Immutable config ---
     address public immutable factory;
     address public immutable treasury;
-    IERC20  public immutable collateral;       // e.g. USDC on rollup
-    string  public question;
+    IERC20 public immutable collateral;
+    string public question;
     uint256 public immutable createdAt;
-    uint256 public immutable resolutionTime;   // when agent is allowed to resolve
-    uint16  public constant  BET_FEE_BPS = 200;      // 2%
-    uint16  public constant  RESOLUTION_FEE_BPS = 500; // 5% of total pool
+    uint256 public immutable resolutionTime;
+    uint16 public constant BET_FEE_BPS = 200; // 2% on every bet
+    uint16 public constant RESOLUTION_FEE_BPS = 500; // 5% of total pool at resolution
 
     // --- State ---
-    // CPMM reserves. Initialized by factory with equal seed -> 50/50 odds.
+    // CPMM reserves. k = yesReserve * noReserve, held constant during trades.
+    // Initialized by the factory with equal seed -> 50/50 odds.
     uint256 public yesReserve;
     uint256 public noReserve;
 
-    // Outstanding shares per user
     mapping(address => uint256) public yesShares;
     mapping(address => uint256) public noShares;
     uint256 public totalYesShares;
@@ -48,12 +53,32 @@ contract PredictionMarket {
     uint256 public totalCollateral; // excludes fees
 
     // --- Events ---
-    event Bet(address indexed user, bool isYes, uint256 collateralIn, uint256 sharesOut, uint256 newYesReserve, uint256 newNoReserve);
+    event Bet(
+        address indexed user,
+        bool isYes,
+        uint256 collateralIn,
+        uint256 sharesOut,
+        uint256 feePaid,
+        uint256 newYesReserve,
+        uint256 newNoReserve
+    );
     event Resolved(Outcome outcome, uint256 resolutionFee);
     event Claimed(address indexed user, uint256 payout);
 
+    // --- Errors ---
+    error NotFactory();
+    error MarketClosed();
+    error PastResolution();
+    error BeforeResolution();
+    error ZeroAmount();
+    error SlippageExceeded();
+    error AlreadyResolved();
+    error BadOutcome();
+    error NotResolved();
+    error NothingToClaim();
+
     modifier onlyFactory() {
-        require(msg.sender == factory, "not factory");
+        if (msg.sender != factory) revert NotFactory();
         _;
     }
 
@@ -65,7 +90,7 @@ contract PredictionMarket {
         uint256 _resolutionTime,
         uint256 _seed
     ) {
-        require(_resolutionTime > block.timestamp, "resolution in past");
+        if (_resolutionTime <= block.timestamp) revert PastResolution();
         factory = _factory;
         treasury = _treasury;
         collateral = _collateral;
@@ -76,47 +101,49 @@ contract PredictionMarket {
         noReserve = _seed;
     }
 
-    // --- Betting ---
+    // --- Price views (bps, 0-10000) ---
 
-    function priceYes() public view returns (uint256 bps) {
-        // Naive spot price in bps (0-10000). Real LMSR would use log-based cost fn.
-        return (noReserve * 10000) / (yesReserve + noReserve);
+    function priceYes() public view returns (uint256) {
+        return (noReserve * 10_000) / (yesReserve + noReserve);
     }
 
-    function priceNo() public view returns (uint256 bps) {
-        return 10000 - priceYes();
+    function priceNo() public view returns (uint256) {
+        return 10_000 - priceYes();
     }
 
-    function _quoteShares(uint256 amountIn, bool isYes) internal view returns (uint256) {
-        // CPMM: k = yesReserve * noReserve
-        // When user deposits X of collateral betting YES, they're effectively removing NO reserve.
-        // sharesOut = yesReserve - k / (noReserve + X)
-        // We treat collateral 1:1 as if it adds to the opposite side.
+    // --- Bet ---
+
+    /// @notice Quote how many shares you'd get for a given collateral amount, pre-fee.
+    function quoteShares(uint256 netIn, bool isYes) public view returns (uint256) {
         uint256 k = yesReserve * noReserve;
         if (isYes) {
-            uint256 newNo = noReserve + amountIn;
+            uint256 newNo = noReserve + netIn;
             uint256 newYes = k / newNo;
             return yesReserve - newYes;
         } else {
-            uint256 newYes = yesReserve + amountIn;
+            uint256 newYes = yesReserve + netIn;
             uint256 newNo = k / newYes;
             return noReserve - newNo;
         }
     }
 
-    function bet(bool isYes, uint256 amount, uint256 minSharesOut) external returns (uint256 shares) {
-        require(outcome == Outcome.UNRESOLVED, "market closed");
-        require(block.timestamp < resolutionTime, "past resolution");
-        require(amount > 0, "zero");
+    function bet(bool isYes, uint256 amount, uint256 minSharesOut)
+        external
+        nonReentrant
+        returns (uint256 shares)
+    {
+        if (outcome != Outcome.UNRESOLVED) revert MarketClosed();
+        if (block.timestamp >= resolutionTime) revert PastResolution();
+        if (amount == 0) revert ZeroAmount();
 
-        uint256 fee = (amount * BET_FEE_BPS) / 10000;
+        uint256 fee = (amount * BET_FEE_BPS) / 10_000;
         uint256 netIn = amount - fee;
 
-        require(collateral.transferFrom(msg.sender, address(this), netIn), "xferFrom net");
-        require(collateral.transferFrom(msg.sender, treasury, fee), "xferFrom fee");
+        collateral.safeTransferFrom(msg.sender, address(this), netIn);
+        collateral.safeTransferFrom(msg.sender, treasury, fee);
 
-        shares = _quoteShares(netIn, isYes);
-        require(shares >= minSharesOut, "slippage");
+        shares = quoteShares(netIn, isYes);
+        if (shares < minSharesOut) revert SlippageExceeded();
 
         if (isYes) {
             noReserve += netIn;
@@ -131,21 +158,21 @@ contract PredictionMarket {
         }
 
         totalCollateral += netIn;
-        emit Bet(msg.sender, isYes, amount, shares, yesReserve, noReserve);
+        emit Bet(msg.sender, isYes, amount, shares, fee, yesReserve, noReserve);
     }
 
     // --- Resolution ---
 
     function resolve(Outcome _outcome) external onlyFactory {
-        require(outcome == Outcome.UNRESOLVED, "already resolved");
-        require(block.timestamp >= resolutionTime, "too early");
-        require(_outcome == Outcome.YES || _outcome == Outcome.NO || _outcome == Outcome.INVALID, "bad outcome");
+        if (outcome != Outcome.UNRESOLVED) revert AlreadyResolved();
+        if (block.timestamp < resolutionTime) revert BeforeResolution();
+        if (_outcome == Outcome.UNRESOLVED) revert BadOutcome();
 
         outcome = _outcome;
 
-        uint256 resolutionFee = (totalCollateral * RESOLUTION_FEE_BPS) / 10000;
+        uint256 resolutionFee = (totalCollateral * RESOLUTION_FEE_BPS) / 10_000;
         if (resolutionFee > 0) {
-            require(collateral.transfer(treasury, resolutionFee), "xfer fee");
+            collateral.safeTransfer(treasury, resolutionFee);
             totalCollateral -= resolutionFee;
         }
 
@@ -154,20 +181,22 @@ contract PredictionMarket {
 
     // --- Claim ---
 
-    function claim() external returns (uint256 payout) {
-        require(outcome != Outcome.UNRESOLVED, "not resolved");
+    function claim() external nonReentrant returns (uint256 payout) {
+        if (outcome == Outcome.UNRESOLVED) revert NotResolved();
 
         if (outcome == Outcome.INVALID) {
-            // Refund proportionally to total shares held
+            // Refund proportionally to all shares held
             uint256 userShares = yesShares[msg.sender] + noShares[msg.sender];
             uint256 totalShares = totalYesShares + totalNoShares;
-            require(userShares > 0 && totalShares > 0, "nothing");
+            if (userShares == 0 || totalShares == 0) revert NothingToClaim();
+
             payout = (userShares * totalCollateral) / totalShares;
             yesShares[msg.sender] = 0;
             noShares[msg.sender] = 0;
         } else {
             uint256 winningShares;
             uint256 totalWinning;
+
             if (outcome == Outcome.YES) {
                 winningShares = yesShares[msg.sender];
                 totalWinning = totalYesShares;
@@ -177,11 +206,12 @@ contract PredictionMarket {
                 totalWinning = totalNoShares;
                 noShares[msg.sender] = 0;
             }
-            require(winningShares > 0 && totalWinning > 0, "not a winner");
+
+            if (winningShares == 0 || totalWinning == 0) revert NothingToClaim();
             payout = (winningShares * totalCollateral) / totalWinning;
         }
 
-        require(collateral.transfer(msg.sender, payout), "xfer claim");
+        collateral.safeTransfer(msg.sender, payout);
         emit Claimed(msg.sender, payout);
     }
 }
