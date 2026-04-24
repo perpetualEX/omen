@@ -1,68 +1,86 @@
 {
   "project": {
     "name": "Omen",
-    "tagline": "Autonomous prediction markets for on-chain events, resolved by AI and chain state.",
-    "description": "Omen is a prediction market appchain where an AI agent proposes, prices (LMSR), and resolves binary markets about on-chain events without human operators. Built as a MiniEVM rollup on Initia, it uses autosigning to make betting feel like tapping 'like', the Interwoven Bridge for one-click USDC onboarding, and .init usernames for human-readable leaderboards.",
+    "tagline": "Prediction markets where an AI trades against you.",
+    "description": "Omen is a prediction market appchain where an AI agent named omen-ai.init proposes binary markets from live Ethereum mainnet signals, takes positions on its own questions with Claude-generated reasoning, and resolves them when the time is up. The agent has a public P&L, and users can bet alongside or against it. Built as a sovereign MiniEVM rollup on Initia (omen-1) with InterwovenKit for wallet UX, autosign for signless betting, the Interwoven Bridge for one-click USDC onboarding, and .init usernames for human-readable leaderboards.",
     "track": "defi",
     "secondary_tracks": ["ai"]
   },
   "rollup": {
-    "chain_id": "omen-testnet-1",
-    "evm_chain_id": 0,
+    "chain_id": "omen-1",
+    "evm_chain_id": 3165038479798559,
     "rollup_type": "minievm",
-    "rpc": "https://rpc.omen-testnet-1.initia.tech",
-    "json_rpc": "https://json-rpc.omen-testnet-1.initia.tech",
-    "explorer": "https://scan.initia.xyz/omen-testnet-1",
-    "deployment_tx": "REPLACE_WITH_DEPLOYMENT_TX_HASH"
+    "minitia_version": "v1.2.15",
+    "rpc": "http://localhost:26657",
+    "json_rpc": "http://localhost:8545",
+    "rest": "http://localhost:1317",
+    "explorer": "https://scan.testnet.initia.xyz/custom-network/add/link?config=eyJ2bSI6ImV2bSIsImNoYWluSWQiOiJvbWVuLTEiLCJtaW5HYXNQcmljZSI6MCwiZGVub20iOiJ1b21lbiIsImxjZCI6Imh0dHA6Ly9sb2NhbGhvc3Q6MTMxNyIsInJwYyI6Imh0dHA6Ly9sb2NhbGhvc3Q6MjY2NTciLCJqc29uUnBjIjoiaHR0cDovL2xvY2FsaG9zdDo4NTQ1IiwiaW5kZXhlciI6Imh0dHA6Ly9sb2NhbGhvc3Q6Njc2NyJ9",
+    "data_availability": "Initia L1",
+    "deployment_tx_l1": "D2E3F96C744C18A0A0796C6EF92E225DF39458DCD40BB51B475116A73D1629E1"
   },
   "features": {
     "interwovenkit_integrated": true,
-    "interwovenkit_entry_point": "frontend/app/providers.tsx",
+    "interwovenkit_entry_point": "frontend/src/providers.tsx",
     "initia_native_features": [
       {
         "feature": "autosign",
-        "where": "frontend/components/BetButton.tsx",
-        "notes": "Enabled on first bet; 24h default session."
+        "where": "frontend/src/providers.tsx (enableAutoSign config) + frontend/src/components/EnableAutosign.tsx (UI)",
+        "notes": "Configured per-chain to auto-approve /minievm.evm.v1.MsgCall. Demonstrated in app via banner + button."
       },
       {
         "feature": "interwoven_bridge",
-        "where": "frontend/components/DepositDrawer.tsx",
-        "notes": "USDC onboarding from any supported chain."
+        "where": "frontend/src/components/BridgeButton.tsx",
+        "notes": "Calls openBridge() from useInterwovenKit. Local-rollup limitation documented inline per Initia hackathon guidance."
       },
       {
         "feature": "initia_usernames",
-        "where": "frontend/components/Leaderboard.tsx",
-        "notes": ".init names resolved for top 100 bettors."
+        "where": "frontend/src/components/Header.tsx, Leaderboard.tsx, Agent page",
+        "notes": "Resolves via useUsernameQuery from @initia/interwovenkit-react. Agent identity is omen-ai.init."
       }
     ]
   },
   "contracts": [
     {
-      "name": "MarketFactory",
-      "address": "REPLACE_AFTER_DEPLOY",
-      "source": "contracts/src/MarketFactory.sol"
-    },
-    {
-      "name": "PredictionMarket",
-      "address": "REPLACE_AFTER_DEPLOY",
-      "source": "contracts/src/PredictionMarket.sol"
+      "name": "MockUSDC",
+      "address": "0xCc3fBE3b260C2A147e16c516FbC0c03152015608",
+      "source": "contracts/src/MockUSDC.sol",
+      "purpose": "ERC20 collateral with built-in faucet"
     },
     {
       "name": "Treasury",
-      "address": "REPLACE_AFTER_DEPLOY",
-      "source": "contracts/src/Treasury.sol"
+      "address": "0x1c39b077277BEFec0A2CA8FAaA6A797E92c45ac3",
+      "source": "contracts/src/Treasury.sol",
+      "purpose": "Fee vault for protocol revenue"
+    },
+    {
+      "name": "MarketFactory",
+      "address": "0x48eCa970472BFd5F2567dfA07f35f52DD36444fA",
+      "source": "contracts/src/MarketFactory.sol",
+      "purpose": "Spawns markets and resolves them; agent-only access"
     }
   ],
+  "tests": {
+    "framework": "Foundry",
+    "passing": 10,
+    "total": 10,
+    "command": "cd contracts && forge test"
+  },
+  "agent": {
+    "address": "0x500b7143E7EAD3a5ed623204850b24042aB0d049",
+    "username": "omen-ai.init",
+    "model": "claude-sonnet-4-5",
+    "behavior": "Proposes 3 markets per round (every 3h cron), takes a position on each with stated reasoning, resolves due markets every 5min by reading chain state."
+  },
   "demo": {
-    "live_url": "REPLACE_WITH_LIVE_URL",
+    "live_url": "http://localhost:5173 (run public/index.html via python3 -m http.server)",
     "video_url": "REPLACE_WITH_VIDEO_URL",
-    "pitch_deck_url": null
+    "github_url": "https://github.com/perpetualex/omen"
   },
   "team": [
     {
-      "name": "REPLACE",
-      "role": "Founder / Full-stack",
-      "github": "REPLACE",
+      "name": "REPLACE_WITH_YOUR_NAME",
+      "role": "Founder · Full-stack",
+      "github": "perpetualex",
       "twitter": "REPLACE"
     }
   ]
