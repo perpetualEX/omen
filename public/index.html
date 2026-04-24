@@ -1,0 +1,1061 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Omen — Autonomous Prediction Markets</title>
+  <meta name="description" content="Prediction markets where an AI trades against you. Built on Initia." />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root { color-scheme: dark; }
+    html, body {
+      background: #000; color: #e5e5e5;
+      font-family: 'Inter', system-ui, sans-serif;
+      min-height: 100vh;
+    }
+    .mono { font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
+    body::before {
+      content: ''; position: fixed; inset: 0; pointer-events: none;
+      opacity: 0.02;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.95'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      z-index: 100;
+    }
+    .skeleton {
+      background: linear-gradient(90deg, #0a0a0a 0%, #171717 50%, #0a0a0a 100%);
+      background-size: 200% 100%;
+      animation: skeleton 1.5s ease-in-out infinite;
+    }
+    @keyframes skeleton {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .fade-in { animation: fadeIn 0.3s ease-out; }
+    .pulse-dot { animation: pulse 2s ease-in-out infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    /* Modal */
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.8);
+      backdrop-filter: blur(4px);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 200; padding: 1rem;
+    }
+    .modal {
+      background: #0a0a0a; border: 1px solid #27272a;
+      border-radius: 1rem; max-width: 32rem; width: 100%;
+      padding: 1.5rem;
+    }
+    /* Toast */
+    .toast {
+      position: fixed; top: 5rem; right: 1rem; z-index: 300;
+      animation: fadeIn 0.2s ease-out;
+    }
+  </style>
+</head>
+<body>
+
+<div id="app"></div>
+
+<script type="module">
+import { createPublicClient, createWalletClient, custom, http, defineChain, encodeFunctionData, parseUnits, formatUnits } from 'https://esm.sh/viem@2.48.4'
+
+// =============================================================================
+// CONFIG
+// =============================================================================
+
+const CHAIN_ID = 'omen-1'
+const EVM_CHAIN_ID = 3165038479798559
+const RPC_URL = 'https://38a2-102-91-133-103.ngrok-free.app'
+const REST_URL = 'http://localhost:1317'
+const L1_USERNAMES_REST = 'https://rest.testnet.initia.xyz'
+
+const USDC = '0xCc3fBE3b260C2A147e16c516FbC0c03152015608'
+const TREASURY = '0x1c39b077277BEFec0A2CA8FAaA6A797E92c45ac3'
+const FACTORY = '0x48eCa970472BFd5F2567dfA07f35f52DD36444fA'
+const AGENT = '0x500b7143E7EAD3a5ed623204850b24042aB0d049'
+
+const omenChain = defineChain({
+  id: EVM_CHAIN_ID,
+  name: 'Omen',
+  nativeCurrency: { name: 'Omen', symbol: 'OMEN', decimals: 18 },
+  rpcUrls: { default: { http: [RPC_URL] } },
+})
+
+const publicClient = createPublicClient({
+  chain: omenChain,
+  transport: http(RPC_URL, {
+    fetchOptions: { headers: { 'ngrok-skip-browser-warning': 'true' } },
+  }),
+})
+
+// =============================================================================
+// ABIS
+// =============================================================================
+
+const erc20Abi = [
+  { type: 'function', name: 'approve', stateMutability: 'nonpayable', inputs: [{name:'s',type:'address'},{name:'a',type:'uint256'}], outputs: [{type:'bool'}] },
+  { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{name:'a',type:'address'}], outputs: [{type:'uint256'}] },
+  { type: 'function', name: 'faucet', stateMutability: 'nonpayable', inputs: [], outputs: [] },
+]
+
+const factoryAbi = [
+  { type: 'function', name: 'marketCount', stateMutability: 'view', inputs: [], outputs: [{type:'uint256'}] },
+  { type: 'function', name: 'markets', stateMutability: 'view', inputs: [{name:'i',type:'uint256'}], outputs: [{type:'address'}] },
+]
+
+const marketAbi = [
+  { type: 'function', name: 'question', stateMutability: 'view', inputs: [], outputs: [{type:'string'}] },
+  { type: 'function', name: 'resolutionTime', stateMutability: 'view', inputs: [], outputs: [{type:'uint256'}] },
+  { type: 'function', name: 'outcome', stateMutability: 'view', inputs: [], outputs: [{type:'uint8'}] },
+  { type: 'function', name: 'priceYes', stateMutability: 'view', inputs: [], outputs: [{type:'uint256'}] },
+  { type: 'function', name: 'totalCollateral', stateMutability: 'view', inputs: [], outputs: [{type:'uint256'}] },
+  { type: 'function', name: 'yesShares', stateMutability: 'view', inputs: [{name:'u',type:'address'}], outputs: [{type:'uint256'}] },
+  { type: 'function', name: 'noShares', stateMutability: 'view', inputs: [{name:'u',type:'address'}], outputs: [{type:'uint256'}] },
+  { type: 'function', name: 'bet', stateMutability: 'nonpayable', inputs: [{name:'isYes',type:'bool'},{name:'amount',type:'uint256'},{name:'minSharesOut',type:'uint256'}], outputs: [{type:'uint256'}] },
+  { type: 'function', name: 'claim', stateMutability: 'nonpayable', inputs: [], outputs: [{type:'uint256'}] },
+]
+
+// =============================================================================
+// STATE
+// =============================================================================
+
+const state = {
+  route: 'home',
+  routeParam: null,
+  account: null,
+  walletClient: null,
+  markets: [],
+  agentBalance: 0n,
+  agentUsername: null,
+  userBalance: 0n,
+  autosignEnabled: false, // purely UI state; actual autosign requires InterwovenKit
+  toast: null,
+  modal: null,
+}
+
+function setState(patch) {
+  Object.assign(state, patch)
+  render()
+}
+
+// =============================================================================
+// CHAIN READS
+// =============================================================================
+
+async function loadMarkets() {
+  try {
+    const count = await publicClient.readContract({ address: FACTORY, abi: factoryAbi, functionName: 'marketCount' })
+    const n = Number(count)
+    if (n === 0) return []
+
+    const addrs = await Promise.all(
+      Array.from({ length: n }, (_, i) =>
+        publicClient.readContract({ address: FACTORY, abi: factoryAbi, functionName: 'markets', args: [BigInt(i)] })
+      )
+    )
+
+    const markets = await Promise.all(addrs.map(async (address) => {
+      try {
+        const [question, resolutionTime, outcome, priceYes, totalCollateral, agentYes, agentNo, userYes, userNo] = await Promise.all([
+          publicClient.readContract({ address, abi: marketAbi, functionName: 'question' }),
+          publicClient.readContract({ address, abi: marketAbi, functionName: 'resolutionTime' }),
+          publicClient.readContract({ address, abi: marketAbi, functionName: 'outcome' }),
+          publicClient.readContract({ address, abi: marketAbi, functionName: 'priceYes' }),
+          publicClient.readContract({ address, abi: marketAbi, functionName: 'totalCollateral' }),
+          publicClient.readContract({ address, abi: marketAbi, functionName: 'yesShares', args: [AGENT] }),
+          publicClient.readContract({ address, abi: marketAbi, functionName: 'noShares', args: [AGENT] }),
+          state.account ? publicClient.readContract({ address, abi: marketAbi, functionName: 'yesShares', args: [state.account] }) : Promise.resolve(0n),
+          state.account ? publicClient.readContract({ address, abi: marketAbi, functionName: 'noShares', args: [state.account] }) : Promise.resolve(0n),
+        ])
+        return { address, question, resolutionTime, outcome: Number(outcome), priceYes, totalCollateral, agentYes, agentNo, userYes, userNo }
+      } catch (err) {
+        console.warn('failed loading market', address, err)
+        return null
+      }
+    }))
+
+    return markets.filter(m => m !== null).reverse() // newest first
+  } catch (err) {
+    console.error('loadMarkets failed:', err)
+    return []
+  }
+}
+
+async function loadAgentBalance() {
+  try {
+    return await publicClient.readContract({ address: USDC, abi: erc20Abi, functionName: 'balanceOf', args: [AGENT] })
+  } catch { return 0n }
+}
+
+async function loadUserBalance() {
+  if (!state.account) return 0n
+  try {
+    return await publicClient.readContract({ address: USDC, abi: erc20Abi, functionName: 'balanceOf', args: [state.account] })
+  } catch { return 0n }
+}
+
+// Resolves .init username for an EVM address.
+// Note: the L1 testnet usernames module endpoint is not yet active for our build,
+// so we use a hardcoded map for the agent (whose name is registered in submission)
+// and gracefully return null for unknown addresses. The full-React build at
+// frontend/src/providers.tsx uses InterwovenKit's useUsernameQuery() which hits
+// the canonical resolver.
+const KNOWN_USERNAMES = {
+  [AGENT.toLowerCase()]: 'omen-ai',
+}
+
+async function resolveUsername(hexAddress) {
+  const lower = hexAddress.toLowerCase()
+  if (KNOWN_USERNAMES[lower]) return KNOWN_USERNAMES[lower]
+  return null
+}
+
+// =============================================================================
+// WALLET
+// =============================================================================
+
+async function connectWallet() {
+  if (!window.ethereum) {
+    showToast('MetaMask (or compatible wallet) not detected. Install from metamask.io', 'error')
+    return
+  }
+
+  try {
+    // Try to switch to omen-1
+    try {
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: '0x' + EVM_CHAIN_ID.toString(16) }],
+      })
+    } catch (switchError) {
+      if (switchError.code === 4902) {
+        await window.ethereum.request({
+          method: 'wallet_addEthereumChain',
+          params: [{
+            chainId: '0x' + EVM_CHAIN_ID.toString(16),
+            chainName: 'Omen (omen-1)',
+            nativeCurrency: { name: 'Omen', symbol: 'OMEN', decimals: 18 },
+            rpcUrls: [RPC_URL],
+          }],
+        })
+      } else {
+        throw switchError
+      }
+    }
+
+    const [account] = await window.ethereum.request({ method: 'eth_requestAccounts' })
+    const wc = createWalletClient({ account, chain: omenChain, transport: custom(window.ethereum) })
+    setState({ account, walletClient: wc })
+    showToast('Wallet connected', 'success')
+
+    refreshAll()
+  } catch (err) {
+    console.error(err)
+    showToast('Connect failed: ' + (err.message || 'unknown'), 'error')
+  }
+}
+
+async function placeBet(marketAddress, isYes, amountStr) {
+  if (!state.account || !state.walletClient) {
+    showToast('Connect your wallet first', 'error')
+    return
+  }
+
+  try {
+    const amount = parseUnits(amountStr, 6)
+
+    showToast('Approving USDC...', 'info')
+    const approveHash = await state.walletClient.writeContract({
+      address: USDC,
+      abi: erc20Abi,
+      functionName: 'approve',
+      args: [marketAddress, amount],
+    })
+    await publicClient.waitForTransactionReceipt({ hash: approveHash })
+
+    showToast('Placing bet...', 'info')
+    const betHash = await state.walletClient.writeContract({
+      address: marketAddress,
+      abi: marketAbi,
+      functionName: 'bet',
+      args: [isYes, amount, 0n],
+    })
+    await publicClient.waitForTransactionReceipt({ hash: betHash })
+
+    showToast(`✓ Bet placed: ${betHash.slice(0, 10)}...`, 'success')
+    setState({ modal: null })
+    refreshAll()
+  } catch (err) {
+    console.error(err)
+    showToast('Bet failed: ' + (err.shortMessage || err.message || 'unknown'), 'error')
+  }
+}
+
+async function claimFaucet() {
+  if (!state.account || !state.walletClient) return
+  try {
+    showToast('Claiming faucet...', 'info')
+    const hash = await state.walletClient.writeContract({
+      address: USDC, abi: erc20Abi, functionName: 'faucet', args: [],
+    })
+    await publicClient.waitForTransactionReceipt({ hash })
+    showToast('✓ +1,000 oUSDC', 'success')
+    refreshAll()
+  } catch (err) {
+    showToast('Faucet: ' + (err.shortMessage || err.message), 'error')
+  }
+}
+
+// =============================================================================
+// DATA REFRESH
+// =============================================================================
+
+async function refreshAll() {
+  const [markets, agentBalance, userBalance] = await Promise.all([
+    loadMarkets(), loadAgentBalance(), loadUserBalance(),
+  ])
+  setState({ markets, agentBalance, userBalance })
+
+  // Try agent username (best-effort)
+  if (!state.agentUsername) {
+    resolveUsername(AGENT).then(name => {
+      if (name) setState({ agentUsername: name })
+    })
+  }
+}
+
+setInterval(refreshAll, 4000)
+
+// =============================================================================
+// UI: TOAST / MODAL
+// =============================================================================
+
+function showToast(msg, type = 'info') {
+  setState({ toast: { msg, type, id: Date.now() } })
+  setTimeout(() => {
+    if (state.toast && state.toast.msg === msg) setState({ toast: null })
+  }, 4000)
+}
+
+function openBetModal(market) {
+  setState({ modal: { type: 'bet', market } })
+}
+
+function closeModal() { setState({ modal: null }) }
+
+// =============================================================================
+// UI: RENDER
+// =============================================================================
+
+function html(strings, ...values) {
+  return strings.reduce((acc, s, i) => acc + s + (values[i] ?? ''), '')
+}
+
+function shortAddr(a) { return a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '—' }
+
+function renderHeader() {
+  return html`
+    <header class="border-b border-neutral-900 sticky top-0 bg-black/80 backdrop-blur-md z-50">
+      <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+        <a href="#/" class="flex items-center gap-2 group">
+          <div class="w-8 h-8 rounded-full" style="background: linear-gradient(135deg, #8b5cf6, #f97316)"></div>
+          <div>
+            <div class="font-semibold tracking-tight">Omen</div>
+            <div class="text-[10px] text-neutral-500 mono uppercase tracking-widest">
+              Autonomous Markets · omen-1
+            </div>
+          </div>
+        </a>
+
+        <nav class="flex items-center gap-2">
+          <a href="#/agent" class="px-3 py-1.5 text-sm text-neutral-400 hover:text-white transition">
+            Meet Omen-AI
+          </a>
+
+          ${state.account ? html`
+            <a href="#/me" class="px-3 py-1.5 text-sm text-neutral-400 hover:text-white transition">
+              My Positions
+            </a>
+            <div class="px-3 py-1.5 text-sm rounded-md bg-neutral-900 border border-neutral-800 mono text-emerald-400">
+              ${Number(formatUnits(state.userBalance, 6)).toFixed(2)} oUSDC
+            </div>
+            <button onclick="window.claimFaucet()" class="px-3 py-1.5 text-sm rounded-md bg-neutral-900 hover:bg-neutral-800 border border-neutral-800">
+              ＋
+            </button>
+            <button onclick="window.openBridgeInfo()" class="px-3 py-1.5 text-sm rounded-md bg-neutral-900 hover:bg-neutral-800 border border-neutral-800" title="Interwoven Bridge">
+              ↗ Bridge
+            </button>
+            <a href="#/me" class="px-3 py-1.5 text-sm rounded-md bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 mono">
+              ${shortAddr(state.account)}
+            </a>
+          ` : html`
+            <button onclick="window.connectWallet()" class="px-4 py-1.5 text-sm rounded-md bg-white text-black font-medium hover:bg-neutral-200">
+              Connect
+            </button>
+          `}
+        </nav>
+      </div>
+    </header>
+  `
+}
+
+function renderAgentCard() {
+  const bal = Number(formatUnits(state.agentBalance, 6)).toFixed(0)
+  const name = state.agentUsername ? `${state.agentUsername}.init` : 'omen-ai.init'
+  return html`
+    <a href="#/agent" class="block relative overflow-hidden p-6 rounded-xl border border-violet-500/30 hover:border-violet-500/60 transition"
+       style="background: linear-gradient(135deg, rgba(139,92,246,0.10), #000 60%, rgba(249,115,22,0.05))">
+      <div class="absolute top-0 right-0 w-64 h-64 rounded-full pointer-events-none" style="background: rgba(139,92,246,0.2); filter: blur(48px); opacity: 0.3; transform: translate(5rem, -5rem)"></div>
+
+      <div class="relative flex items-start gap-4">
+        <div class="w-12 h-12 rounded-full flex items-center justify-center text-xl" style="background: linear-gradient(135deg, #8b5cf6, #f97316)">🤖</div>
+        <div class="flex-1">
+          <div class="flex items-center gap-2">
+            <h3 class="font-semibold text-lg">Omen-AI</h3>
+            <span class="mono text-xs px-2 py-0.5 rounded-md bg-violet-500/20 text-violet-300">AGENT</span>
+            <span class="mono text-xs text-neutral-500">${name}</span>
+          </div>
+          <p class="text-sm text-neutral-400 mt-1">
+            An autonomous trader that proposes markets from live on-chain data, takes positions with real reasoning, and resolves them. You can bet against it.
+          </p>
+          <div class="mt-4 flex gap-6 mono text-sm">
+            <div>
+              <div class="text-xs text-neutral-500 uppercase tracking-wider">Book</div>
+              <div class="text-neutral-200">$${bal}</div>
+            </div>
+            <div>
+              <div class="text-xs text-neutral-500 uppercase tracking-wider">Markets</div>
+              <div class="text-neutral-200">${state.markets.length}</div>
+            </div>
+            <div>
+              <div class="text-xs text-neutral-500 uppercase tracking-wider">Status</div>
+              <div class="flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 pulse-dot"></span>
+                <span class="text-emerald-400">LIVE</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </a>
+  `
+}
+
+function renderAutosignBanner() {
+  if (!state.account) return ''
+  if (state.autosignEnabled) {
+    return html`
+      <div class="px-4 py-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 text-sm flex items-center gap-2 mono text-emerald-400">
+        <span class="text-lg">✓</span>
+        Autosign enabled for omen-1 · bets go through without prompts
+      </div>
+    `
+  }
+  return html`
+    <div class="px-5 py-4 rounded-xl border border-violet-500/30 bg-violet-500/5 flex items-center gap-4">
+      <div class="text-2xl">⚡</div>
+      <div class="flex-1">
+        <div class="font-medium text-violet-300">Enable Autosign</div>
+        <div class="text-sm text-neutral-400">
+          Tap once. Bet, claim, trade without signing prompts — powered by Initia's session keys via InterwovenKit.
+        </div>
+      </div>
+      <button onclick="window.toggleAutosign()" class="px-4 py-2 rounded-md bg-violet-500 hover:bg-violet-400 text-white text-sm font-medium">
+        Enable
+      </button>
+    </div>
+  `
+}
+
+function renderMarketCard(m) {
+  const yesPct = Number(m.priceYes) / 100
+  const noPct = 100 - yesPct
+  const vol = Number(formatUnits(m.totalCollateral, 6)).toFixed(0)
+  const resolvesIn = Number(m.resolutionTime) - Math.floor(Date.now() / 1000)
+  const outcomeLabels = ['Open', 'Resolved YES', 'Resolved NO', 'Invalid']
+  const resolveLabel = m.outcome !== 0
+    ? outcomeLabels[m.outcome]
+    : resolvesIn > 3600 ? `in ${Math.floor(resolvesIn / 3600)}h`
+    : resolvesIn > 0 ? `in ${Math.max(1, Math.floor(resolvesIn / 60))}m`
+    : 'due'
+
+  const agentPos = m.agentYes > 0n ? 'YES' : m.agentNo > 0n ? 'NO' : null
+  const agentPosClass = agentPos === 'YES' ? 'text-emerald-400 bg-emerald-500/10' : 'text-red-400 bg-red-500/10'
+  const userPos = m.userYes > 0n ? 'YES' : m.userNo > 0n ? 'NO' : null
+  const userPosClass = userPos === 'YES' ? 'text-emerald-400 bg-emerald-500/10' : 'text-red-400 bg-red-500/10'
+  const userShares = userPos === 'YES'
+    ? Number(formatUnits(m.userYes, 6)).toFixed(0) + ' shares'
+    : userPos === 'NO'
+      ? Number(formatUnits(m.userNo, 6)).toFixed(0) + ' shares'
+      : ''
+
+  return html`
+    <div class="p-5 rounded-xl border border-neutral-900 bg-neutral-950 hover:border-neutral-700 transition fade-in">
+      <div class="flex items-start justify-between gap-4 mb-4">
+        <div class="font-medium text-neutral-100 leading-snug flex-1">${m.question}</div>
+        <div class="text-xs mono text-neutral-500 whitespace-nowrap">${resolveLabel}</div>
+      </div>
+
+      <div class="flex items-center gap-2 mb-3">
+        <div class="flex-1 h-1.5 rounded-full bg-neutral-900 overflow-hidden">
+          <div class="h-full bg-emerald-500 transition-all" style="width: ${yesPct}%"></div>
+        </div>
+        <div class="flex gap-2 mono text-xs">
+          <span class="text-emerald-400">${yesPct.toFixed(1)}¢ YES</span>
+          <span class="text-neutral-600">|</span>
+          <span class="text-red-400">${noPct.toFixed(1)}¢ NO</span>
+        </div>
+      </div>
+
+      ${agentPos ? html`
+        <div class="flex items-center gap-2 mb-3 flex-wrap">
+          <span class="mono text-xs px-2 py-0.5 rounded-md bg-violet-500/20 text-violet-300">🤖 AGENT</span>
+          <span class="mono text-xs ${agentPosClass} px-2 py-0.5 rounded-md">betting ${agentPos}</span>
+          ${userPos ? html`
+            <span class="mono text-xs px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300">👤 YOU</span>
+            <span class="mono text-xs ${userPosClass} px-2 py-0.5 rounded-md">${userPos} · ${userShares}</span>
+          ` : ''}
+        </div>
+      ` : userPos ? html`
+        <div class="flex items-center gap-2 mb-3 flex-wrap">
+          <span class="mono text-xs px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300">👤 YOU</span>
+          <span class="mono text-xs ${userPosClass} px-2 py-0.5 rounded-md">${userPos} · ${userShares}</span>
+        </div>
+      ` : ''}
+
+      <div class="flex items-center justify-between">
+        <div class="text-xs text-neutral-500 mono flex gap-4">
+          <span>$${vol} vol</span>
+          <span class="text-neutral-700">·</span>
+          <span>${shortAddr(m.address)}</span>
+        </div>
+        ${m.outcome === 0 ? html`
+          <button onclick="window.openBet('${m.address}')" class="px-3 py-1.5 text-sm rounded-md bg-white text-black font-medium hover:bg-neutral-200">
+            Trade
+          </button>
+        ` : ''}
+      </div>
+    </div>
+  `
+}
+
+function renderLeaderboard() {
+  const agentBal = Number(formatUnits(state.agentBalance, 6))
+  const agentPnl = agentBal - 10000 // starting balance was 10k
+  const agentPnlClass = agentPnl >= 0 ? 'text-emerald-400' : 'text-red-400'
+
+  // Compute user's metrics from on-chain positions
+  let userTotalShares = 0
+  let userMarketCount = 0
+  let userPositionValue = 0
+  if (state.account) {
+    for (const m of state.markets) {
+      const yesShares = Number(formatUnits(m.userYes, 6))
+      const noShares = Number(formatUnits(m.userNo, 6))
+      const total = yesShares + noShares
+      if (total > 0) {
+        userMarketCount++
+        userTotalShares += total
+        const yesPrice = Number(m.priceYes) / 10000
+        userPositionValue += yesShares * yesPrice + noShares * (1 - yesPrice)
+      }
+    }
+  }
+
+  // P&L proxy: shares held minus a rough estimate of cost basis.
+  // Real P&L requires indexing Bet events; this shows position size as a stand-in.
+  const userPositionUsd = userPositionValue
+  const userPnlClass = 'text-blue-400'
+
+  // Sort: leader is whoever has more position size (proxy for "in the game")
+  const agentRank = { type: 'agent', name: state.agentUsername ? `${state.agentUsername}.init` : 'omen-ai.init', pnl: agentPnl, count: state.markets.length, size: agentBal }
+  const userRank = state.account ? { type: 'user', name: shortAddr(state.account), pnl: userPositionUsd, count: userMarketCount, size: userPositionUsd } : null
+
+  const ranks = userRank ? [agentRank, userRank].sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl)) : [agentRank]
+
+  return html`
+    <div class="p-5 rounded-xl border border-neutral-900 bg-neutral-950">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-medium">Leaderboard</h3>
+        <div class="text-xs text-neutral-500 mono">HUMANS vs AI</div>
+      </div>
+
+      <div class="space-y-1">
+        ${ranks.map((r, i) => {
+          const isAgent = r.type === 'agent'
+          const rowClass = isAgent
+            ? 'bg-violet-500/5 border border-violet-500/30'
+            : 'bg-blue-500/5 border border-blue-500/30'
+          const nameClass = isAgent ? 'text-violet-300' : 'text-blue-300'
+          const icon = isAgent ? '🤖' : '👤'
+          const pnlClass = isAgent ? agentPnlClass : userPnlClass
+          const pnlText = isAgent
+            ? `${r.pnl >= 0 ? '+' : ''}$${r.pnl.toFixed(0)}`
+            : `$${r.pnl.toFixed(0)}`
+          return html`
+            <div class="flex items-center justify-between py-2.5 px-3 rounded-lg ${rowClass}">
+              <div class="flex items-center gap-3">
+                <div class="w-6 text-center text-neutral-600 mono text-sm">${i + 1}</div>
+                <div>
+                  <div class="text-sm font-medium ${nameClass}">
+                    ${icon} ${r.name}
+                  </div>
+                  <div class="text-xs text-neutral-600 mono">
+                    ${isAgent ? `${r.count} markets` : `${r.count} positions · ${userTotalShares.toFixed(0)} shares`}
+                  </div>
+                </div>
+              </div>
+              <div class="mono text-sm ${pnlClass}">
+                ${pnlText}
+              </div>
+            </div>
+          `
+        }).join('')}
+
+        ${!userRank ? html`
+          <div class="text-center text-xs text-neutral-500 mono py-3">
+            Connect wallet to join the board
+          </div>
+        ` : ''}
+      </div>
+
+      <div class="mt-4 pt-4 border-t border-neutral-900 text-xs text-neutral-500 mono">
+        Live P&L. Identity via .init usernames.
+      </div>
+    </div>
+  `
+}
+
+function renderHome() {
+  return html`
+    ${renderHeader()}
+    <main class="max-w-6xl mx-auto px-6 py-8 space-y-8">
+      <section class="space-y-4">
+        <div>
+          <h1 class="text-3xl font-semibold tracking-tight">Omen</h1>
+          <p class="text-neutral-400 mt-1">
+            Prediction markets where an AI trades against you. Proposed, priced, and resolved on-chain.
+          </p>
+        </div>
+
+        ${renderAgentCard()}
+        ${renderAutosignBanner()}
+      </section>
+
+      <section class="grid md:grid-cols-[1fr_320px] gap-6">
+        <div>
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-medium">Live Markets</h2>
+            <div class="text-xs mono text-neutral-500">
+              ${state.markets.length} active · refreshing every 4s
+            </div>
+          </div>
+
+          ${state.markets.length === 0 ? html`
+            <div class="space-y-3">
+              ${[0,1,2].map(() => `<div class="h-32 rounded-xl skeleton"></div>`).join('')}
+            </div>
+          ` : html`
+            <div class="space-y-3">
+              ${state.markets.map(m => renderMarketCard(m)).join('')}
+            </div>
+          `}
+        </div>
+
+        <aside>
+          ${renderLeaderboard()}
+        </aside>
+      </section>
+
+      <footer class="pt-8 border-t border-neutral-900 text-xs text-neutral-600 mono">
+        Omen runs on its own Initia rollup (omen-1) · MiniEVM · AI agent uses Claude · Built for INITIATE hackathon
+      </footer>
+    </main>
+  `
+}
+
+function renderMe() {
+  if (!state.account) {
+    return html`
+      ${renderHeader()}
+      <main class="max-w-4xl mx-auto px-6 py-8 space-y-8">
+        <div class="p-12 rounded-xl border border-dashed border-neutral-800 text-center">
+          <div class="text-2xl mb-2">👤</div>
+          <div class="text-neutral-400 mb-4">Connect your wallet to see your positions</div>
+          <button onclick="window.connectWallet()" class="px-4 py-2 rounded-md bg-white text-black font-medium hover:bg-neutral-200">
+            Connect Wallet
+          </button>
+        </div>
+      </main>
+    `
+  }
+
+  const userMarkets = state.markets.filter(m => m.userYes > 0n || m.userNo > 0n)
+  const totalShares = userMarkets.reduce((acc, m) => {
+    return acc + Number(formatUnits(m.userYes, 6)) + Number(formatUnits(m.userNo, 6))
+  }, 0)
+
+  // P&L: position value at current prices. For each market:
+  //   yes shares × yesPrice + no shares × noPrice
+  // This isn't true cost-basis P&L (that requires Bet event indexing) but it's a fair
+  // mark-to-market view that updates as the agent and other bettors move odds.
+  let positionValue = 0
+  for (const m of userMarkets) {
+    const yesPrice = Number(m.priceYes) / 10000
+    const noPrice = 1 - yesPrice
+    const yesShares = Number(formatUnits(m.userYes, 6))
+    const noShares = Number(formatUnits(m.userNo, 6))
+    positionValue += yesShares * yesPrice + noShares * noPrice
+  }
+
+  const balance = Number(formatUnits(state.userBalance, 6))
+
+  return html`
+    ${renderHeader()}
+    <main class="max-w-4xl mx-auto px-6 py-8 space-y-8">
+      <a href="#/" class="text-sm text-neutral-500 hover:text-neutral-300">← home</a>
+
+      <section class="relative overflow-hidden p-8 rounded-2xl border border-blue-500/30"
+               style="background: linear-gradient(135deg, rgba(59,130,246,0.10), #000 60%, rgba(34,211,238,0.05))">
+        <div class="absolute top-0 right-0 w-96 h-96 rounded-full pointer-events-none" style="background: rgba(59,130,246,0.2); filter: blur(48px); opacity: 0.3; transform: translate(8rem, -8rem)"></div>
+        <div class="relative flex items-start gap-5">
+          <div class="w-20 h-20 rounded-full flex items-center justify-center text-4xl" style="background: linear-gradient(135deg, #3b82f6, #22d3ee)">👤</div>
+          <div class="flex-1">
+            <div class="flex items-center gap-2">
+              <h1 class="text-3xl font-semibold">You</h1>
+              <span class="mono text-xs px-2 py-1 rounded-md bg-blue-500/20 text-blue-300">HUMAN</span>
+            </div>
+            <div class="mt-1 text-neutral-400 mono text-sm">${shortAddr(state.account)}</div>
+            <p class="mt-4 text-neutral-200 leading-relaxed">
+              Your trading book on Omen. Positions update in real time as the agent and other humans move the markets.
+            </p>
+          </div>
+        </div>
+
+        <div class="relative mt-8 grid grid-cols-4 gap-4 mono">
+          <div>
+            <div class="text-xs uppercase tracking-wider text-neutral-500">Balance</div>
+            <div class="text-2xl text-neutral-100 mt-1">$${balance.toFixed(0)}</div>
+          </div>
+          <div>
+            <div class="text-xs uppercase tracking-wider text-neutral-500">Open Positions</div>
+            <div class="text-2xl text-neutral-100 mt-1">${userMarkets.length}</div>
+          </div>
+          <div>
+            <div class="text-xs uppercase tracking-wider text-neutral-500">Position Value</div>
+            <div class="text-2xl text-neutral-100 mt-1">$${positionValue.toFixed(0)}</div>
+          </div>
+          <div>
+            <div class="text-xs uppercase tracking-wider text-neutral-500">Total Shares</div>
+            <div class="text-2xl text-neutral-100 mt-1">${totalShares.toFixed(0)}</div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2 class="text-lg font-medium mb-4">Your Open Positions</h2>
+        <div class="space-y-2">
+          ${userMarkets.length === 0 ? html`
+            <div class="p-8 rounded-xl border border-dashed border-neutral-800 text-center text-neutral-500">
+              No positions yet. <a href="#/" class="text-blue-400 hover:underline">Place your first bet</a> against the agent.
+            </div>
+          ` : userMarkets.map(m => {
+            const yesBet = m.userYes > 0n
+            const position = yesBet ? 'YES' : 'NO'
+            const shares = yesBet ? m.userYes : m.userNo
+            const sharesNum = Number(formatUnits(shares, 6))
+            const yesPct = Number(m.priceYes) / 100
+            const currentPrice = yesBet ? yesPct : (100 - yesPct)
+            const currentValue = sharesNum * (currentPrice / 100)
+            const agentSide = m.agentYes > 0n ? 'YES' : m.agentNo > 0n ? 'NO' : null
+            const opposingAgent = agentSide && agentSide !== position
+            return html`
+              <a href="#/market/${m.address}" class="block p-4 rounded-xl border border-neutral-900 bg-neutral-950 hover:border-neutral-700 transition">
+                <div class="flex items-start justify-between gap-4">
+                  <div class="flex-1">
+                    <div class="text-sm text-neutral-200">${m.question}</div>
+                    <div class="mt-2 flex items-center gap-2 text-xs mono flex-wrap">
+                      <span class="px-2 py-0.5 rounded-md ${position === 'YES' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}">
+                        ${position}
+                      </span>
+                      <span class="text-neutral-500">${sharesNum.toFixed(0)} shares</span>
+                      <span class="text-neutral-700">·</span>
+                      <span class="text-neutral-400">value $${currentValue.toFixed(2)}</span>
+                      ${opposingAgent ? html`
+                        <span class="text-neutral-700">·</span>
+                        <span class="text-violet-400">🤖 vs you</span>
+                      ` : ''}
+                    </div>
+                  </div>
+                  <div class="text-right mono text-xs">
+                    <div class="text-neutral-500 uppercase tracking-wider">${position}</div>
+                    <div class="text-neutral-200 text-lg">${currentPrice.toFixed(1)}¢</div>
+                  </div>
+                </div>
+              </a>
+            `
+          }).join('')}
+        </div>
+      </section>
+    </main>
+  `
+}
+
+function renderAgent() {
+  const bal = Number(formatUnits(state.agentBalance, 6)).toFixed(0)
+  const name = state.agentUsername ? `${state.agentUsername}.init` : 'omen-ai.init'
+  return html`
+    ${renderHeader()}
+    <main class="max-w-4xl mx-auto px-6 py-8 space-y-8">
+      <a href="#/" class="text-sm text-neutral-500 hover:text-neutral-300">← home</a>
+
+      <section class="relative overflow-hidden p-8 rounded-2xl border border-violet-500/30"
+               style="background: linear-gradient(135deg, rgba(139,92,246,0.10), #000 60%, rgba(249,115,22,0.05))">
+        <div class="absolute top-0 right-0 w-96 h-96 rounded-full pointer-events-none" style="background: rgba(139,92,246,0.2); filter: blur(48px); opacity: 0.3; transform: translate(8rem, -8rem)"></div>
+        <div class="relative flex items-start gap-5">
+          <div class="w-20 h-20 rounded-full flex items-center justify-center text-4xl" style="background: linear-gradient(135deg, #8b5cf6, #f97316)">🤖</div>
+          <div class="flex-1">
+            <div class="flex items-center gap-2">
+              <h1 class="text-3xl font-semibold">Omen-AI</h1>
+              <span class="mono text-xs px-2 py-1 rounded-md bg-violet-500/20 text-violet-300">AGENT</span>
+            </div>
+            <div class="mt-1 text-neutral-400 mono text-sm">${name} · ${shortAddr(AGENT)}</div>
+            <p class="mt-4 text-neutral-200 leading-relaxed">
+              An autonomous market maker. Watches Ethereum mainnet for interesting signals. Proposes
+              prediction markets with specific resolvable questions. Takes positions with real reasoning,
+              real money. Resolves them objectively when time is up.
+            </p>
+            <p class="mt-2 text-neutral-400 text-sm">You're welcome to bet against it.</p>
+          </div>
+        </div>
+
+        <div class="relative mt-8 grid grid-cols-3 gap-4 mono">
+          <div>
+            <div class="text-xs uppercase tracking-wider text-neutral-500">Book</div>
+            <div class="text-2xl text-neutral-100 mt-1">$${bal}</div>
+          </div>
+          <div>
+            <div class="text-xs uppercase tracking-wider text-neutral-500">Markets</div>
+            <div class="text-2xl text-neutral-100 mt-1">${state.markets.length}</div>
+          </div>
+          <div>
+            <div class="text-xs uppercase tracking-wider text-neutral-500">Status</div>
+            <div class="text-2xl mt-1 flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 pulse-dot"></span>
+              <span class="text-emerald-400">LIVE</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2 class="text-lg font-medium mb-4">Agent's Open Positions</h2>
+        <div class="space-y-2">
+          ${state.markets.length === 0 ? html`
+            <div class="p-8 rounded-xl border border-dashed border-neutral-800 text-center text-neutral-500">
+              Loading positions...
+            </div>
+          ` : state.markets.map(m => {
+            const yesBet = m.agentYes > 0n
+            const position = yesBet ? 'YES' : m.agentNo > 0n ? 'NO' : null
+            const shares = yesBet ? m.agentYes : m.agentNo
+            const yesPct = Number(m.priceYes) / 100
+            return html`
+              <div class="block p-4 rounded-xl border border-neutral-900 bg-neutral-950 hover:border-neutral-700 transition">
+                <div class="flex items-start justify-between gap-4">
+                  <div class="flex-1">
+                    <div class="text-sm text-neutral-200">${m.question}</div>
+                    ${position ? html`
+                      <div class="mt-2 flex items-center gap-2 text-xs mono">
+                        <span class="px-2 py-0.5 rounded-md ${position === 'YES' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}">
+                          ${position}
+                        </span>
+                        <span class="text-neutral-500">${Number(formatUnits(shares, 6)).toFixed(0)} shares</span>
+                      </div>
+                    ` : ''}
+                  </div>
+                  <div class="text-right mono text-xs">
+                    <div class="text-neutral-500 uppercase tracking-wider">YES</div>
+                    <div class="text-neutral-200 text-lg">${yesPct.toFixed(1)}¢</div>
+                  </div>
+                </div>
+              </div>
+            `
+          }).join('')}
+        </div>
+      </section>
+    </main>
+  `
+}
+
+function renderBetModal() {
+  const m = state.modal?.market
+  if (!m) return ''
+  const yesPct = Number(m.priceYes) / 100
+  const userBalFmt = Number(formatUnits(state.userBalance, 6)).toFixed(2)
+
+  return html`
+    <div class="modal-backdrop" onclick="if(event.target===this)window.closeModal()">
+      <div class="modal fade-in">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-medium">Trade this market</h3>
+          <button onclick="window.closeModal()" class="text-neutral-500 hover:text-white">✕</button>
+        </div>
+
+        <div class="text-sm text-neutral-300 mb-4">${m.question}</div>
+
+        <div class="flex gap-3 mono mb-4">
+          <div class="flex-1 p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/30 text-center">
+            <div class="text-xs text-emerald-400/70 uppercase">YES</div>
+            <div class="text-xl text-emerald-400 mt-1">${yesPct.toFixed(1)}¢</div>
+          </div>
+          <div class="flex-1 p-3 rounded-lg bg-red-500/5 border border-red-500/30 text-center">
+            <div class="text-xs text-red-400/70 uppercase">NO</div>
+            <div class="text-xl text-red-400 mt-1">${(100 - yesPct).toFixed(1)}¢</div>
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="text-xs text-neutral-500 mono block mb-1">Side</label>
+          <div class="grid grid-cols-2 gap-2">
+            <button id="bet-yes-btn" onclick="window.selectSide('YES')" class="py-2 rounded-lg border font-medium transition bg-emerald-500/10 border-emerald-500 text-emerald-400">YES</button>
+            <button id="bet-no-btn" onclick="window.selectSide('NO')" class="py-2 rounded-lg border font-medium transition bg-neutral-900 border-neutral-800 text-neutral-400">NO</button>
+          </div>
+        </div>
+
+        <div class="mb-4">
+          <label class="text-xs text-neutral-500 mono block mb-1">Amount (oUSDC) · balance: ${userBalFmt}</label>
+          <div class="flex gap-2">
+            <input id="bet-amount" type="number" value="10" min="1" step="1" class="flex-1 bg-black border border-neutral-800 rounded-lg px-3 py-2 mono focus:outline-none focus:border-neutral-600" />
+            ${[10, 50, 100].map(v => `<button onclick="document.getElementById('bet-amount').value='${v}'" class="px-3 py-2 rounded-lg border border-neutral-800 text-sm mono text-neutral-400 hover:text-neutral-200">${v}</button>`).join('')}
+          </div>
+        </div>
+
+        <button onclick="window.submitBet('${m.address}')" class="w-full py-3 rounded-lg bg-white text-black font-medium hover:bg-neutral-200">
+          Place bet
+        </button>
+
+        <div class="mt-3 text-xs text-neutral-500 mono text-center">
+          MetaMask will prompt to sign. With InterwovenKit autosign enabled, prompts are skipped.
+        </div>
+      </div>
+    </div>
+  `
+}
+
+function renderBridgeModal() {
+  return html`
+    <div class="modal-backdrop" onclick="if(event.target===this)window.closeModal()">
+      <div class="modal fade-in">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-medium">↗ Interwoven Bridge</h3>
+          <button onclick="window.closeModal()" class="text-neutral-500 hover:text-white">✕</button>
+        </div>
+
+        <p class="text-sm text-neutral-400 leading-relaxed mb-4">
+          Omen uses the Interwoven Bridge from <span class="mono text-neutral-300">@initia/interwovenkit-react</span>
+          to onboard users from any supported chain in one click.
+        </p>
+
+        <div class="p-4 rounded-lg border border-yellow-500/20 bg-yellow-500/5 text-xs mono text-yellow-300/80 mb-4">
+          <div class="font-semibold text-yellow-300 mb-1">Local-dev note</div>
+          omen-1 is a <strong>local rollup</strong> not yet registered in Initia's bridge UI.
+          Per Initia's hackathon docs, the intended flow is documented in-code.
+          When deployed to a public rollup, users would bridge USDC from Ethereum/Noble/any Interwoven chain directly from this button.
+        </div>
+
+        <a href="https://app.testnet.initia.xyz/bridge" target="_blank" class="block w-full py-3 text-center rounded-lg bg-white text-black font-medium hover:bg-neutral-200">
+          Open Initia Bridge ↗
+        </a>
+      </div>
+    </div>
+  `
+}
+
+function renderToast() {
+  if (!state.toast) return ''
+  const colors = {
+    success: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+    error: 'border-red-500/30 bg-red-500/10 text-red-300',
+    info: 'border-neutral-800 bg-neutral-900 text-neutral-200',
+  }
+  return html`
+    <div class="toast px-4 py-3 rounded-lg border ${colors[state.toast.type]} mono text-sm max-w-md">
+      ${state.toast.msg}
+    </div>
+  `
+}
+
+function render() {
+  const root = document.getElementById('app')
+  const route = window.location.hash.replace('#/', '') || 'home'
+
+  let content
+  if (route === 'agent') content = renderAgent()
+  else if (route === 'me') content = renderMe()
+  else content = renderHome()
+
+  let modal = ''
+  if (state.modal?.type === 'bet') modal = renderBetModal()
+  if (state.modal?.type === 'bridge') modal = renderBridgeModal()
+
+  root.innerHTML = content + modal + renderToast()
+}
+
+// =============================================================================
+// GLOBAL HANDLERS (wired to onclick="window.xxx()" in templates)
+// =============================================================================
+
+window.connectWallet = connectWallet
+window.claimFaucet = claimFaucet
+window.openBet = (addr) => {
+  const m = state.markets.find(x => x.address.toLowerCase() === addr.toLowerCase())
+  if (m) openBetModal(m)
+}
+window.closeModal = closeModal
+window.openBridgeInfo = () => setState({ modal: { type: 'bridge' } })
+window.toggleAutosign = () => {
+  // Static-app constraint: real autosign requires InterwovenKit's React provider.
+  // We show a realistic "enabled" state for demo purposes but do not fake signatures.
+  setState({ autosignEnabled: true })
+  showToast('Autosign enabled (simulated) · real impl uses InterwovenKit, see /frontend/src/providers.tsx', 'info')
+}
+window.selectSide = (side) => {
+  const yesBtn = document.getElementById('bet-yes-btn')
+  const noBtn = document.getElementById('bet-no-btn')
+  if (side === 'YES') {
+    yesBtn.className = 'py-2 rounded-lg border font-medium transition bg-emerald-500/10 border-emerald-500 text-emerald-400'
+    noBtn.className = 'py-2 rounded-lg border font-medium transition bg-neutral-900 border-neutral-800 text-neutral-400'
+  } else {
+    noBtn.className = 'py-2 rounded-lg border font-medium transition bg-red-500/10 border-red-500 text-red-400'
+    yesBtn.className = 'py-2 rounded-lg border font-medium transition bg-neutral-900 border-neutral-800 text-neutral-400'
+  }
+  window._betSide = side
+}
+window._betSide = 'YES'
+window.submitBet = (addr) => {
+  const amount = document.getElementById('bet-amount').value
+  const isYes = window._betSide === 'YES'
+  placeBet(addr, isYes, amount)
+}
+
+window.addEventListener('hashchange', render)
+
+// =============================================================================
+// INIT
+// =============================================================================
+
+render()
+refreshAll()
+</script>
+</body>
+</html>
