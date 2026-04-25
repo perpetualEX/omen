@@ -1,0 +1,26 @@
+diff --git a/package.json b/package.json
+index 0c7ba068babb24e84263e8adaadd88881b878144..e8f50bdf87f19a1b17ac2428f5d42ff2666ce622 100644
+--- a/package.json
++++ b/package.json
+@@ -33,15 +33,13 @@
+     "!wasmd-*/**/*.md",
+     "!cosmos-sdk-*/**/*.md"
+   ],
+-  "scripts": {
+-    "format": "prettier --write --log-level warn \"./src/**/*.ts\" \"./scripts/**/*.js\"",
+-    "precodegen": "./scripts/exports_protos.sh",
+-    "codegen": "rm -rf ./src && ./scripts/codegen.js && npm run format",
+-    "prepare-publishing": "./scripts/prepare-publishing.sh",
+-    "build": "rm -rf ./build && tsc && npm run prepare-publishing"
+-  },
+-  "dependencies": {
++  "exports": {
++    ".": "./index.js",
++    "./*": "./*",
++    "./*.js": "./*.js",
++    "./package.json": "./package.json"
+   },
++  "dependencies": {},
+   "devDependencies": {
+     "@cosmology/telescope": "^1.12.20",
+     "@types/node": "^15.6.2",
