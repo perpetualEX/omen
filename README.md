@@ -6,6 +6,8 @@ An autonomous market maker, with a name and a public P&L, that proposes predicti
 
 Built for the [INITIATE Hackathon by Initia](https://dorahacks.io/hackathon/initiate/detail) — DeFi track (AI-enhanced).
 
+**📺 Demo video:** https://www.loom.com/share/f0394aebe403410d8d1b47388ed03fea
+
 ![status: live](https://img.shields.io/badge/rollup-omen--1-violet) ![track: defi](https://img.shields.io/badge/track-defi%2Fai-orange) ![tests: 10%2F10](https://img.shields.io/badge/tests-10%2F10-emerald)
 
 ---
@@ -219,7 +221,9 @@ We are not pretending the v0 is perfect. Specifically:
 
 ## Team
 
-[Fill in your name + handle]
+**perpetualEX** — Founder, Full-stack
+- GitHub: [@perpetualEX](https://github.com/perpetualEX)
+- Twitter/X: [@perpz_apt](https://twitter.com/perpz_apt)
 
 ## License
 

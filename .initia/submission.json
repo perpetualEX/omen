@@ -73,15 +73,15 @@
   },
   "demo": {
     "live_url": "http://localhost:5173 (run public/index.html via python3 -m http.server)",
-    "video_url": "REPLACE_WITH_VIDEO_URL",
-    "github_url": "https://github.com/perpetualex/omen"
+    "video_url": "https://www.loom.com/share/f0394aebe403410d8d1b47388ed03fea",
+    "github_url": "https://github.com/perpetualEX/omen"
   },
   "team": [
     {
-      "name": "REPLACE_WITH_YOUR_NAME",
+      "name": "perpetualEX",
       "role": "Founder · Full-stack",
-      "github": "perpetualex",
-      "twitter": "REPLACE"
+      "github": "perpetualEX",
+      "twitter": "perpz_apt"
     }
   ]
 }
